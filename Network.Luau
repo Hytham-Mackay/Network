@@ -1,7 +1,42 @@
+--!strict
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
 local Network = {}
+
+-- Função de validação registrada com SetValidator.
+-- Retorna true/false e, opcionalmente o motivo da falha.
+
+export type Validator = (player: Player, ...any) -> (boolean, string?)
+
+-- Objeto retornado por OnServerEvent
+
+export type ServerEvent = {
+	Connect: (self: ServerEvent, callback: (player: Player, ...any) -> ()) -> RBXScriptConnection,
+	Once: (self: ServerEvent, callback: (player: Player, ...any) -> ()) -> RBXScriptConnection,
+	Wait: (self: ServerEvent) -> (Player, ...any),
+}
+
+-- Configuração aceita por Network.Prewarm (todos os campos são opcionais)
+
+export type PrewarmConfig = {
+	remoteEvents: { string }?,
+	remoteFunctions: { string }?,
+	bindableEvents: { string }?,
+	bindableFunctions: { string }?,
+}
+
+-- Retorno de Network.GetEventList
+
+export type EventList = {
+	RemoteEvents: { string },
+	RemoteFunctions: { string },
+	BindableEvents: { string },
+	BindableFunctions: { string },
+}
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 local CONFIG = {
 
@@ -25,20 +60,29 @@ local CONFIG = {
 
 -- Eventos únicos do servidor (Para bindableEvents)
 
-local SERVER_ONLY_EVENTS = {
+-- Eventos únicos do servidor (Para bindableEvents)
+
+local SERVER_ONLY_EVENTS: { [string]: boolean } = {
 	exemplo = true,
 	TestServerEvent = true,
 }
 
 -- Mesma ideia, mas para bindableFunctions
 
-local SERVER_ONLY_FUNCTIONS = {}
+local SERVER_ONLY_FUNCTIONS: { [string]: boolean } = {}
 
 --------------------------------------------------------------------------------------------------------------------------------------
 
 -- Tabelas de cache separadas por tipo
 
 local cache = {
+
+	RemoteEvents: { [string]: RemoteEvent },
+	RemoteFunctions: { [string]: RemoteFunction },
+	BindableEvents: { [string]: BindableEvent },
+	BindableFunctions: { [string]: BindableFunction },	
+
+} = {
 
 	RemoteEvents = {},
 	RemoteFunctions = {},
@@ -48,13 +92,13 @@ local cache = {
 
 -- Validadores registrados para RemoteEvents
 
-local Validators = {}
+local Validators: { [string]: Validator } = {}
 
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 -- Funções utilitárias internas
 
-local function DebugPrint(...)
+local function DebugPrint(...: any)
 	if CONFIG.DEBUG then
 		print("[Network]", ...)
 	end
@@ -74,8 +118,9 @@ local IS_SERVER = RunService:IsServer()
 
 local function _getRemoteEvent(name: string): RemoteEvent
 	-- verifica cache primeiro
-	if cache.RemoteEvents[name] then
-		return cache.RemoteEvents[name]
+	local cached = cache.RemoteEvents[name]
+	if cached then
+		return cached
 	end
 
 	local RealName = CONFIG.PREFIX_REMOTE_EVENT .. name
@@ -139,7 +184,7 @@ local function _getRemoteEvent(name: string): RemoteEvent
 		event.Name = RealName
 		event.Parent = script
 
-		cache.RemoteEvents[name] = event :: RemoteEvent
+		cache.RemoteEvents[name] = event
 		return event
 	end
 end
@@ -148,8 +193,9 @@ end
 -- Busca ou cria um RemoteFunction, essa lógica vai se reptir bastante
 
 local function _getRemoteFunction(name: string): RemoteFunction
-	if cache.RemoteFunctions[name] then
-		return cache.RemoteFunctions[name]
+	local cached = cache.RemoteFunctions[name]
+	if cached then
+		return cached
 	end
 
 	local RealName = CONFIG.PREFIX_REMOTE_FUNCTION .. name
@@ -218,8 +264,9 @@ local function _getBindableEvent(name: string): BindableEvent
 		error(string.format('[Network] BindableEvent "%s" é exclusivo do servidor e foi solicitado no cliente.', name))
 	end
 
-	if cache.BindableEvents[name] then
-		return cache.BindableEvents[name]
+	local cached = cache.BindableEvents[name]
+	if cached then
+		return cached
 	end
 
 	local RealName = CONFIG.PREFIX_BINDABLE_EVENT .. name
@@ -242,8 +289,9 @@ local function _getBindableFunction(name: string): BindableFunction
 		)
 	end
 
-	if cache.BindableFunctions[name] then
-		return cache.BindableFunctions[name]
+	local cached = cache.BindableFunctions[name]
+	if cached then
+		return cached
 	end
 
 	local RealName = CONFIG.PREFIX_BINDABLE_FUNCTION .. name
@@ -263,8 +311,9 @@ end
 -- Outra parte importante, o any em players serve para receber qualquer quantidade de argumentos
 
 -- boolean retorna true e false enquanto string? significa que pode ser nil, ai é so para o motivo de falha na validação
+-- (essa assinatura agora está no tipo exportado Validator, lá em cima)
 
-function Network.SetValidator(EventName: string, Validator: (Player, ...any) -> (boolean, string?))
+function Network.SetValidator(EventName: string, Validator: Validator)
 	if IS_CLIENT then
 		warn("[Network] Validadores só devem ser registrados no servidor. Ignorando.")
 		return
@@ -331,7 +380,7 @@ end
 
 -- RemoteEvents, Cliente e Servidor
 
-function Network.FireServer(name: string, ...)
+function Network.FireServer(name: string, ...: any)
 	if IS_SERVER then
 		error("[Network] FireServer só pode ser chamado do cliente.")
 	end
@@ -340,7 +389,7 @@ function Network.FireServer(name: string, ...)
 	event:FireServer(...)
 end
 
-function Network.FireClient(name: string, client: Player, ...)
+function Network.FireClient(name: string, client: Player, ...: any)
 	if IS_CLIENT then
 		error("[Network] FireClient só pode ser chamado do servidor.")
 	end
@@ -351,7 +400,7 @@ end
 
 -- Dispara pra todo mundo conectado, massa
 
-function Network.FireAllClients(name: string, ...)
+function Network.FireAllClients(name: string, ...: any)
 	if IS_CLIENT then
 		error("[Network] FireAllClients só pode ser chamado do servidor.")
 	end
@@ -362,7 +411,7 @@ end
 
 -- Dispara pra todos os clientes, menos um escolhido, se for preconceituoso...
 
-function Network.FireExceptClient(name: string, exceptClient: Player, ...)
+function Network.FireExceptClient(name: string, exceptClient: Player, ...: any)
 	if IS_CLIENT then
 		error("[Network] FireExceptClient só pode ser chamado do servidor.")
 	end
@@ -387,7 +436,7 @@ end
 -- Se houver um validador registrado para esse evento, ele será executado
 -- antes do callback. Se falhar, o callback não é chamado.
 
-function Network.OnServerEvent(name: string)
+function Network.OnServerEvent(name: string): ServerEvent
 	if IS_CLIENT then
 		error("[Network] OnServerEvent só pode ser chamado do servidor.")
 	end
@@ -398,7 +447,7 @@ function Network.OnServerEvent(name: string)
 		-- Depois da seta indica o tipo de retorno da função, engraçado
 		-- nesse caso () equivale a void, meros nada
 
-		Connect = function(_, callback: (Player, ...any) -> ())
+		Connect = function(_: ServerEvent, callback: (player: Player, ...any) -> ())
 			return event.OnServerEvent:Connect(function(player: Player, ...)
 				if not _runValidator(name, player, ...) then
 					return
@@ -412,7 +461,7 @@ function Network.OnServerEvent(name: string)
 		-- Once está sendo usado para conectar callbacks que só rodem uma vez.
 		-- Só um evento VÁLIDO consome o Once: eventos inválidos são ignorados e ele continua esperando.
 
-		Once = function(_, callback: (Player, ...any) -> ())
+		Once = function(_: ServerEvent, callback: (player: Player, ...any) -> ())
 			local connection: RBXScriptConnection
 
 			connection = event.OnServerEvent:Connect(function(player: Player, ...)
@@ -431,7 +480,7 @@ function Network.OnServerEvent(name: string)
 		-- Ignora eventos inválidos e continua esperando até chegar um válido.
 		-- table.pack/args.n preservam argumentos nil no meio da lista.
 
-		Wait = function(_)
+		Wait = function(_: ServerEvent)
 			while true do
 				local args = table.pack(event.OnServerEvent:Wait())
 				local player = args[1] :: Player
@@ -450,7 +499,7 @@ end
 
 --O cliente invoca uma função do servidor e espera a resposta
 
-function Network.InvokeServer(name: string, ...): ...any
+function Network.InvokeServer(name: string, ...: any): ...any
 	if IS_SERVER then
 		error("[Network] InvokeServer só pode ser chamado do cliente.")
 	end
@@ -461,7 +510,7 @@ end
 
 -- o Contrario, o servidor invoca uma função no cliente
 
-function Network.InvokeClient(name: string, client: Player, ...): ...any
+function Network.InvokeClient(name: string, client: Player, ...: any): ...any
 	if IS_CLIENT then
 		error("[Network] InvokeClient só pode ser chamado do servidor.")
 	end
@@ -497,7 +546,7 @@ end
 -- Dispara um BindableEvent. Funciona apenas entre scripts do mesmo contexto
 -- (mesmo VM — servidor OU cliente, nunca os dois).
 
-function Network.FireBindable(name: string, ...)
+function Network.FireBindable(name: string, ...: any)
 	local event = _getBindableEvent(name)
 	event:Fire(...)
 end
@@ -515,7 +564,7 @@ end
 
 -- Invoca um BindableFunction e espera a resposta.
 
-function Network.InvokeBindable(name: string, ...): ...any
+function Network.InvokeBindable(name: string, ...: any): ...any
 	local func = _getBindableFunction(name)
 	return func:Invoke(...)
 end
@@ -533,12 +582,7 @@ end
 
 -- prewarm é tipo micro ondas, ou seja, Pré-cria múltiplos eventos de uma só vez
 
-function Network.Prewarm(config: {
-	remoteEvents: { string }?,
-	remoteFunctions: { string }?,
-	bindableEvents: { string }?,
-	bindableFunctions: { string }?,
-})
+function Network.Prewarm(config: PrewarmConfig)
 	if IS_CLIENT then
 		warn("[Network] Prewarm só deve ser chamado no servidor.")
 		return
@@ -573,13 +617,8 @@ end
 
 -- Retorna uma lista com todos os eventos criados até o momento.
 
-function Network.GetEventList(): {
-	RemoteEvents: { string },
-	RemoteFunctions: { string },
-	BindableEvents: { string },
-	BindableFunctions: { string },
-}
-	local result = {
+function Network.GetEventList(): EventList
+	local result: EventList = {
 		RemoteEvents = {},
 		RemoteFunctions = {},
 		BindableEvents = {},
