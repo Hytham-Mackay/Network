@@ -5,13 +5,15 @@ local RunService = game:GetService("RunService")
 
 local Network = {}
 
--- Função de validação registrada com SetValidator.
--- Retorna true/false e, opcionalmente o motivo da falha.
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+-- Tipos públicos (acessíveis por quem usa o módulo, ex.: Network.ServerEvent)
+
+-- Função de validação registrada com SetValidator.
+-- Retorna true/false e, opcionalmente, o motivo da falha.
 export type Validator = (player: Player, ...any) -> (boolean, string?)
 
--- Objeto retornado por OnServerEvent
-
+-- Objeto retornado por Network.OnServerEvent
 export type ServerEvent = {
 	Connect: (self: ServerEvent, callback: (player: Player, ...any) -> ()) -> RBXScriptConnection,
 	Once: (self: ServerEvent, callback: (player: Player, ...any) -> ()) -> RBXScriptConnection,
@@ -19,7 +21,6 @@ export type ServerEvent = {
 }
 
 -- Configuração aceita por Network.Prewarm (todos os campos são opcionais)
-
 export type PrewarmConfig = {
 	remoteEvents: { string }?,
 	remoteFunctions: { string }?,
@@ -28,7 +29,6 @@ export type PrewarmConfig = {
 }
 
 -- Retorno de Network.GetEventList
-
 export type EventList = {
 	RemoteEvents: { string },
 	RemoteFunctions: { string },
@@ -36,7 +36,7 @@ export type EventList = {
 	BindableFunctions: { string },
 }
 
-------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 local CONFIG = {
 
@@ -60,8 +60,6 @@ local CONFIG = {
 
 -- Eventos únicos do servidor (Para bindableEvents)
 
--- Eventos únicos do servidor (Para bindableEvents)
-
 local SERVER_ONLY_EVENTS: { [string]: boolean } = {
 	exemplo = true,
 	TestServerEvent = true,
@@ -75,20 +73,19 @@ local SERVER_ONLY_FUNCTIONS: { [string]: boolean } = {}
 
 -- Tabelas de cache separadas por tipo
 
-local cache = {
-
+local cache: {
 	RemoteEvents: { [string]: RemoteEvent },
 	RemoteFunctions: { [string]: RemoteFunction },
 	BindableEvents: { [string]: BindableEvent },
-	BindableFunctions: { [string]: BindableFunction },	
+	BindableFunctions: { [string]: BindableFunction },
+} =
+	{
 
-} = {
-
-	RemoteEvents = {},
-	RemoteFunctions = {},
-	BindableEvents = {},
-	BindableFunctions = {},
-}
+		RemoteEvents = {},
+		RemoteFunctions = {},
+		BindableEvents = {},
+		BindableFunctions = {},
+	}
 
 -- Validadores registrados para RemoteEvents
 
@@ -116,193 +113,141 @@ local IS_SERVER = RunService:IsServer()
 
 -- Obtenção de eventos + cache e criação autmática + Profissionalismo Mourant
 
-local function _getRemoteEvent(name: string): RemoteEvent
+-- Lógica comum de RemoteEvent e RemoteFunction (a única diferença é a classe, o prefixo e a tabela de cache):
+--   cache -> nome real -> objeto existente? -> cliente espera / servidor cria -> valida ClassName -> cache
+-- Os wrappers _getRemoteEvent e _getRemoteFunction, logo abaixo, só escolhem esses três parâmetros.
+-- O "T" é o tipo guardado no cache (RemoteEvent ou RemoteFunction) e é inferido a partir da tabela recebida.
+
+-- Classes permitidas nos helpers internos: restringe o className na checagem de tipos
+type RemoteClass = "RemoteEvent" | "RemoteFunction"
+type BindableClass = "BindableEvent" | "BindableFunction"
+
+local function _getRemote<T>(className: RemoteClass, prefix: string, store: { [string]: T }, name: string): T
 	-- verifica cache primeiro
-	local cached = cache.RemoteEvents[name]
+	local cached = store[name]
 	if cached then
 		return cached
 	end
 
-	local RealName = CONFIG.PREFIX_REMOTE_EVENT .. name
+	local realName = prefix .. name
 
-	local Existing = script:FindFirstChild(RealName)
+	local existing = script:FindFirstChild(realName)
 
-	if Existing then
-		-- Proteção pra ter certeza que é um RemoteEvent
-		if not Existing:IsA("RemoteEvent") then
+	local object: Instance
+
+	if existing then
+		object = existing
+	elseif IS_CLIENT then
+		-- Aqui o cliente deve esperar o servidor criar
+		DebugPrint("Cliente aguardando " .. className .. ":", realName)
+
+		local waited = script:WaitForChild(realName, CONFIG.WAIT_TIMEOUT)
+
+		if not waited then
 			error(
 				string.format(
-
-					'[Network] Objeto "%s" já existe no módulo, mas não é um RemoteEvent (é %s). '
-						.. "Verifique se não há conflito de nomes com outro tipo de instância.",
-					RealName,
-					Existing.ClassName
-				)
-			)
-		end
-
-		cache.RemoteEvents[name] = Existing :: RemoteEvent
-		return Existing :: RemoteEvent
-	end
-
-	if IS_CLIENT then
-		-- Aqui  o cliente deve esperar o servidor criar
-		DebugPrint("Cliente aguardando RemoteEvent:", RealName)
-
-		local event = script:WaitForChild(RealName, CONFIG.WAIT_TIMEOUT)
-
-		if not event then
-			error(
-				string.format(
-					"[Network] Timeout: RemoteEvent '%s' não foi criado pelo servidor em %d segundos. "
-						.. "Verifique se o servidor registrou esse evento antes do cliente tentar usá-lo.",
+					"[Network] Timeout: %s '%s' não foi criado pelo servidor em %d segundos. "
+						.. "Verifique se o servidor criou esse objeto (ou chamou Network.Prewarm) antes do cliente tentar usá-lo.",
+					className,
 					name,
 					CONFIG.WAIT_TIMEOUT
 				)
 			)
 		end
 
-		-- Verificação de tipo igual o primeiro
-		if not event:IsA("RemoteEvent") then
-			error(
-				string.format(
-					'[Network] Objeto "%s" foi encontrado, mas não é um RemoteEvent (é %s).',
-					RealName,
-					event.ClassName
-				)
-			)
-		end
-
-		cache.RemoteEvents[name] = event :: RemoteEvent
-		return event :: RemoteEvent
+		object = waited
 	else
-		-- Servidor cria o evento
+		-- Servidor cria o objeto
+		DebugPrint("Servidor criando " .. className .. ":", realName)
 
-		DebugPrint("Servidor criando RemoteEvent:", RealName)
+		local created = Instance.new(className)
+		created.Name = realName
+		created.Parent = script
 
-		local event = Instance.new("RemoteEvent")
-		event.Name = RealName
-		event.Parent = script
-
-		cache.RemoteEvents[name] = event
-		return event
+		object = created
 	end
-end
------------------------------------------------------------------------------------------------------------------------------------------
 
--- Busca ou cria um RemoteFunction, essa lógica vai se reptir bastante
+	-- Proteção pra ter certeza que é do tipo esperado (vale para objeto já existente e para o que o cliente esperou)
+	if not object:IsA(className) then
+		error(
+			string.format(
+				'[Network] Objeto "%s" já existe no módulo, mas não é um %s (é %s). '
+					.. "Verifique se não há conflito de nomes com outro tipo de instância.",
+				realName,
+				className,
+				object.ClassName
+			)
+		)
+	end
+
+	-- O IsA com className dinâmico não refina o tipo, então o cast para any fica só aqui, num lugar central.
+	-- A segurança de tipo para quem chama continua nos wrappers, que declaram o retorno.
+	store[name] = object :: any
+	return object :: any
+end
+
+local function _getRemoteEvent(name: string): RemoteEvent
+	return _getRemote("RemoteEvent", CONFIG.PREFIX_REMOTE_EVENT, cache.RemoteEvents, name)
+end
 
 local function _getRemoteFunction(name: string): RemoteFunction
-	local cached = cache.RemoteFunctions[name]
-	if cached then
-		return cached
-	end
-
-	local RealName = CONFIG.PREFIX_REMOTE_FUNCTION .. name
-
-	local Existing = script:FindFirstChild(RealName)
-
-	if Existing then
-		if not Existing:IsA("RemoteFunction") then
-			error(
-				string.format(
-					'[Network] Objeto "%s" já existe no módulo, mas não é um RemoteFunction (é %s). '
-						.. "Verifique se não há conflito de nomes com outro tipo de instância.",
-					RealName,
-					Existing.ClassName
-				)
-			)
-		end
-
-		cache.RemoteFunctions[name] = Existing :: RemoteFunction
-		return Existing :: RemoteFunction
-	end
-
-	if IS_CLIENT then
-		DebugPrint("Cliente aguardando RemoteFunction", RealName)
-		local func = script:WaitForChild(RealName, CONFIG.WAIT_TIMEOUT)
-
-		if not func then
-			error(
-				string.format(
-					"[Network] Timeout: RemoteFunction '%s' não foi criado pelo servidor em %d segundos.",
-					name,
-					CONFIG.WAIT_TIMEOUT
-				)
-			)
-		end
-
-		if not func:IsA("RemoteFunction") then
-			error(
-				string.format(
-					'[Network] Objeto "%s" foi encontrado, mas não é um RemoteFunction (é %s).',
-					RealName,
-					func.ClassName
-				)
-			)
-		end
-
-		cache.RemoteFunctions[name] = func :: RemoteFunction
-		return func :: RemoteFunction
-	else
-		DebugPrint("Servidor criando RemoteFunction:", RealName)
-		local func = Instance.new("RemoteFunction")
-		func.Name = RealName
-		func.Parent = script
-
-		cache.RemoteFunctions[name] = func
-		return func
-	end
+	return _getRemote("RemoteFunction", CONFIG.PREFIX_REMOTE_FUNCTION, cache.RemoteFunctions, name)
 end
 
 -------------------------------------------------------------------------------------------------------------------------------------
 
--- BindableEvents, como eu disse isso só vai se repetir. Meu medo é eu esquecer algo em um.
+-- Lógica comum de BindableEvent e BindableFunction:
+--   server-only? -> cache -> cria -> cache
+--
+-- Bindables são mantidos sem Parent para que cada VM (servidor e cliente) possua a sua própria instância.
+-- Eles não são usados para comunicação entre servidor e cliente: cada contexto executa a sua cópia
+-- do módulo, com o seu próprio cache, e nada disso é replicado.
 
-local function _getBindableEvent(name: string): BindableEvent
-	if SERVER_ONLY_EVENTS[name] and not IS_SERVER then
-		error(string.format('[Network] BindableEvent "%s" é exclusivo do servidor e foi solicitado no cliente.', name))
-	end
-
-	local cached = cache.BindableEvents[name]
-	if cached then
-		return cached
-	end
-
-	local RealName = CONFIG.PREFIX_BINDABLE_EVENT .. name
-
-	DebugPrint("Criando BindableEvent (local a este contexto):", RealName)
-	local event = Instance.new("BindableEvent")
-	event.Name = RealName
-
-	cache.BindableEvents[name] = event
-	return event
-end
---------------------------------------------------------------------------------------------------------------------------------------------
-
--- BindableFunction — mesma lógica e mesmo motivo de não ter Parent (ver nota em _getBindableEvent).
-
-local function _getBindableFunction(name: string): BindableFunction
-	if SERVER_ONLY_FUNCTIONS[name] and not IS_SERVER then
+local function _getBindable<T>(
+	className: BindableClass,
+	prefix: string,
+	serverOnly: { [string]: boolean },
+	store: { [string]: T },
+	name: string
+): T
+	if serverOnly[name] and IS_CLIENT then
 		error(
-			string.format('[Network] BindableFunction "%s" é exclusiva do servidor e foi solicitada no cliente.', name)
+			string.format(
+				'[Network] Acesso do cliente bloqueado a %s "%s": este nome está marcado como server-only.',
+				className,
+				name
+			)
 		)
 	end
 
-	local cached = cache.BindableFunctions[name]
+	local cached = store[name]
 	if cached then
 		return cached
 	end
 
-	local RealName = CONFIG.PREFIX_BINDABLE_FUNCTION .. name
+	local realName = prefix .. name
 
-	DebugPrint("Criando BindableFunction (local a este contexto):", RealName)
-	local func = Instance.new("BindableFunction")
-	func.Name = RealName
-	-- Sem func.Parent = script — ver nota em _getBindableEvent.
+	DebugPrint("Criando " .. className .. " (local a este contexto):", realName)
+	local object = Instance.new(className)
+	object.Name = realName
+	-- Sem object.Parent — ver a nota acima de _getBindable.
 
-	cache.BindableFunctions[name] = func
-	return func
+	store[name] = object :: any
+	return object :: any
+end
+
+local function _getBindableEvent(name: string): BindableEvent
+	return _getBindable("BindableEvent", CONFIG.PREFIX_BINDABLE_EVENT, SERVER_ONLY_EVENTS, cache.BindableEvents, name)
+end
+
+local function _getBindableFunction(name: string): BindableFunction
+	return _getBindable(
+		"BindableFunction",
+		CONFIG.PREFIX_BINDABLE_FUNCTION,
+		SERVER_ONLY_FUNCTIONS,
+		cache.BindableFunctions,
+		name
+	)
 end
 -----------------------------------------------------------------------------------------------------------------------------------
 
@@ -313,7 +258,7 @@ end
 -- boolean retorna true e false enquanto string? significa que pode ser nil, ai é so para o motivo de falha na validação
 -- (essa assinatura agora está no tipo exportado Validator, lá em cima)
 
-function Network.SetValidator(EventName: string, Validator: Validator)
+function Network.SetValidator(EventName: string, validator: Validator)
 	if IS_CLIENT then
 		warn("[Network] Validadores só devem ser registrados no servidor. Ignorando.")
 		return
@@ -321,9 +266,9 @@ function Network.SetValidator(EventName: string, Validator: Validator)
 
 	assert(type(EventName) == "string" and EventName ~= "", "[Network] EventName precisa ser uma string não vazia.")
 
-	assert(type(Validator) == "function", "[Network] Validator precisa ser uma função.")
+	assert(type(validator) == "function", "[Network] Validator precisa ser uma função.")
 
-	Validators[EventName] = Validator
+	Validators[EventName] = validator
 	DebugPrint("Validador registrado para:", EventName)
 end
 
@@ -339,18 +284,26 @@ function Network.RemoveValidator(eventName: string)
 	DebugPrint("Validador removido para:", eventName)
 end
 
--- Adição do helper
+-- Helper interno usado pelo OnServerEvent (Connect, Once e Wait).
+-- O validador é buscado em Validators[name] NO MOMENTO DO DISPARO, e não quando o
+-- OnServerEvent é chamado. Assim, SetValidator/RemoveValidator valem para todos os
+-- listeners, mesmo os que foram conectados antes.
+-- Retorna true se o evento pode seguir para o callback, false se deve ser ignorado.
 
-local function _RunValidator(name: string, player: Player, ...: any): boolean
-	local Validator = Validators[name]
+local function _runValidator(name: string, player: Player, ...: any): boolean
+	local validator = Validators[name]
 
-	if not Validator then
-		return true -- Pode ser válido mesmo sem um validador registrado
+	-- Validador é opcional: sem validador, o evento sempre passa
+	if not validator then
+		return true
 	end
 
-	local success, ok, err = pcall(Validator, player, ...)
+	-- pcall porque o cliente controla os argumentos: um validador que não espera
+	-- um tipo (ex.: indexar um nil) lançaria erro. Nesse caso o evento é rejeitado.
+	local success, ok, err = pcall(validator, player, ...)
 
 	if not success then
+		-- Quando pcall falha, "ok" contém a mensagem de erro (por isso o tostring)
 		warn(
 			string.format(
 				"[Network] Validador de '%s' gerou um erro ao processar evento de %s: %s",
@@ -368,7 +321,7 @@ local function _RunValidator(name: string, player: Player, ...: any): boolean
 				"[Network] Validação falhou para '%s' de %s: %s",
 				name,
 				player.Name,
-				err or "Motivo desconhecido"
+				err or "motivo desconhecido"
 			)
 		)
 		return false
@@ -376,6 +329,7 @@ local function _RunValidator(name: string, player: Player, ...: any): boolean
 
 	return true
 end
+
 ---------------------------------------------------------------------------------------------------------------------------------------------------------
 
 -- RemoteEvents, Cliente e Servidor
@@ -433,8 +387,10 @@ function Network.OnClientEvent(name: string): RBXScriptSignal
 end
 
 -- Usado pelo servidor para ouvir eventos vindos do cliente.
--- Se houver um validador registrado para esse evento, ele será executado
--- antes do callback. Se falhar, o callback não é chamado.
+-- Sempre retorna o mesmo tipo de objeto (ServerEvent), com Connect, Once e Wait, exista ou não um validador.
+-- Se houver um validador registrado para esse evento (a qualquer momento, antes ou depois
+-- deste OnServerEvent ser chamado), ele será executado antes do callback.
+-- Se falhar, o callback não é chamado.
 
 function Network.OnServerEvent(name: string): ServerEvent
 	if IS_CLIENT then
