@@ -9,7 +9,7 @@ local Network = {}
 
 -- Tipos públicos (acessíveis por quem usa o módulo, ex.: Network.ServerEvent)
 
--- Função de validação registrada com SetValidator.
+-- Função de validação registrada com SetValidator (vale para OnServerEvent e para OnServerInvoke).
 -- Retorna true/false e, opcionalmente, o motivo da falha.
 export type Validator = (player: Player, ...any) -> (boolean, string?)
 
@@ -58,14 +58,16 @@ local CONFIG = {
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------
 
--- Eventos únicos do servidor (Para bindableEvents)
+-- Nomes de BindableEvents que existem só no servidor.
+-- Pedir um desses nomes no cliente gera um erro explicativo, em vez de criar um bindable
+-- separado (cada VM tem o seu) que ninguém nunca dispara.
+-- Isto NÃO é segurança: o cliente consegue ler esta lista. A proteção real fica nos validadores do servidor.
+-- Edite conforme o seu projeto, por exemplo:
+--   PlayerDamaged = true,
 
-local SERVER_ONLY_EVENTS: { [string]: boolean } = {
-	exemplo = true,
-	TestServerEvent = true,
-}
+local SERVER_ONLY_EVENTS: { [string]: boolean } = {}
 
--- Mesma ideia, mas para bindableFunctions
+-- Mesma ideia, mas para BindableFunctions
 
 local SERVER_ONLY_FUNCTIONS: { [string]: boolean } = {}
 
@@ -87,7 +89,7 @@ local cache: {
 		BindableFunctions = {},
 	}
 
--- Validadores registrados para RemoteEvents
+-- Validadores registrados para RemoteEvents e RemoteFunctions
 
 local Validators: { [string]: Validator } = {}
 
@@ -107,25 +109,47 @@ local IS_CLIENT = RunService:IsClient()
 
 local IS_SERVER = RunService:IsServer()
 
+-- Registro dos callbacks já atribuídos (OnServerInvoke, OnClientInvoke e OnBindableInvoke).
+-- Não dá para ler esses callbacks de volta pela instância, então o módulo guarda por conta própria
+-- quais nomes já foram registrados, para avisar quando um callback for substituído.
+
+local registeredCallbacks: { [string]: boolean } = {}
+
+local function _markCallback(kind: string, name: string)
+	local key = kind .. ":" .. name
+
+	if registeredCallbacks[key] then
+		warn(
+			string.format(
+				"[Network] %s('%s') já tinha um callback registrado. O anterior foi substituído.",
+				kind,
+				name
+			)
+		)
+	end
+
+	registeredCallbacks[key] = true
+end
+
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 -- Parte importante bebê
 
 -- Obtenção de eventos + cache e criação autmática + Profissionalismo Mourant
 
+-- Classes permitidas nos helpers internos: restringe o className na checagem de tipos
+type RemoteClass = "RemoteEvent" | "RemoteFunction"
+type BindableClass = "BindableEvent" | "BindableFunction"
+
 -- Lógica comum de RemoteEvent e RemoteFunction (a única diferença é a classe, o prefixo e a tabela de cache):
 --   cache -> nome real -> objeto existente? -> cliente espera / servidor cria -> valida ClassName -> cache
 -- Os wrappers _getRemoteEvent e _getRemoteFunction, logo abaixo, só escolhem esses três parâmetros.
 -- O "T" é o tipo guardado no cache (RemoteEvent ou RemoteFunction) e é inferido a partir da tabela recebida.
 
--- Classes permitidas nos helpers internos: restringe o className na checagem de tipos
-type RemoteClass = "RemoteEvent" | "RemoteFunction"
-type BindableClass = "BindableEvent" | "BindableFunction"
-
 local function _getRemote<T>(className: RemoteClass, prefix: string, store: { [string]: T }, name: string): T
 	-- verifica cache primeiro
 	local cached = store[name]
-	if cached then
+	if cached ~= nil then
 		return cached
 	end
 
@@ -186,11 +210,34 @@ local function _getRemote<T>(className: RemoteClass, prefix: string, store: { [s
 	return object :: any
 end
 
+-- Os validadores são indexados só pelo nome. Para um validador nunca valer por engano para um
+-- RemoteEvent E para um RemoteFunction ao mesmo tempo, o mesmo nome não pode ser usado nos dois tipos.
+
 local function _getRemoteEvent(name: string): RemoteEvent
+	if cache.RemoteFunctions[name] then
+		error(
+			string.format(
+				'[Network] O nome "%s" já é usado por um RemoteFunction. '
+					.. "RemoteEvent e RemoteFunction não podem ter o mesmo nome (os validadores são indexados pelo nome).",
+				name
+			)
+		)
+	end
+
 	return _getRemote("RemoteEvent", CONFIG.PREFIX_REMOTE_EVENT, cache.RemoteEvents, name)
 end
 
 local function _getRemoteFunction(name: string): RemoteFunction
+	if cache.RemoteEvents[name] then
+		error(
+			string.format(
+				'[Network] O nome "%s" já é usado por um RemoteEvent. '
+					.. "RemoteEvent e RemoteFunction não podem ter o mesmo nome (os validadores são indexados pelo nome).",
+				name
+			)
+		)
+	end
+
 	return _getRemote("RemoteFunction", CONFIG.PREFIX_REMOTE_FUNCTION, cache.RemoteFunctions, name)
 end
 
@@ -221,7 +268,7 @@ local function _getBindable<T>(
 	end
 
 	local cached = store[name]
-	if cached then
+	if cached ~= nil then
 		return cached
 	end
 
@@ -258,6 +305,8 @@ end
 -- boolean retorna true e false enquanto string? significa que pode ser nil, ai é so para o motivo de falha na validação
 -- (essa assinatura agora está no tipo exportado Validator, lá em cima)
 
+-- O validador vale para o RemoteEvent (OnServerEvent) OU para o RemoteFunction (OnServerInvoke) com esse nome.
+
 function Network.SetValidator(EventName: string, validator: Validator)
 	if IS_CLIENT then
 		warn("[Network] Validadores só devem ser registrados no servidor. Ignorando.")
@@ -272,21 +321,9 @@ function Network.SetValidator(EventName: string, validator: Validator)
 	DebugPrint("Validador registrado para:", EventName)
 end
 
--- Remover Validator, bem explicatorio...
-
-function Network.RemoveValidator(eventName: string)
-	if IS_CLIENT then
-		warn("[Network] Validadores só devem ser removidos no servidor. Ignorando.")
-		return
-	end
-
-	Validators[eventName] = nil
-	DebugPrint("Validador removido para:", eventName)
-end
-
--- Helper interno usado pelo OnServerEvent (Connect, Once e Wait).
+-- Helper interno usado pelo OnServerEvent (Connect, Once e Wait) e pelo OnServerInvoke.
 -- O validador é buscado em Validators[name] NO MOMENTO DO DISPARO, e não quando o
--- OnServerEvent é chamado. Assim, SetValidator/RemoveValidator valem para todos os
+-- OnServerEvent/OnServerInvoke é chamado. Assim, SetValidator/RemoveValidator valem para todos os
 -- listeners, mesmo os que foram conectados antes.
 -- Retorna true se o evento pode seguir para o callback, false se deve ser ignorado.
 
@@ -475,13 +512,27 @@ function Network.InvokeClient(name: string, client: Player, ...: any): ...any
 	return func:InvokeClient(client, ...)
 end
 
+-- Registra o callback que o servidor executa quando o cliente invoca.
+-- Se houver um validador registrado para esse nome (a qualquer momento), ele roda antes do callback.
+-- Se a validação falhar, o InvokeServer do cliente recebe nil. O motivo aparece só no warn do servidor,
+-- para não entregar ao cliente informação sobre as regras de validação.
+
 function Network.OnServerInvoke(name: string, callback: (Player, ...any) -> ...any)
 	if IS_CLIENT then
 		error("[Network] OnServerInvoke só pode ser chamado do servidor.")
 	end
 
 	local func = _getRemoteFunction(name)
-	func.OnServerInvoke = callback
+
+	_markCallback("OnServerInvoke", name)
+
+	func.OnServerInvoke = function(player: Player, ...: any): ...any
+		if not _runValidator(name, player, ...) then
+			return nil
+		end
+
+		return callback(player, ...)
+	end
 end
 
 -- o contrário, registra o callback que o cliente executa quando o servidor invoca
@@ -492,6 +543,9 @@ function Network.OnClientInvoke(name: string, callback: (...any) -> ...any)
 	end
 
 	local func = _getRemoteFunction(name)
+
+	_markCallback("OnClientInvoke", name)
+
 	func.OnClientInvoke = callback
 end
 
@@ -529,6 +583,9 @@ end
 
 function Network.OnBindableInvoke(name: string, callback: (...any) -> ...any)
 	local func = _getBindableFunction(name)
+
+	_markCallback("OnBindableInvoke", name)
+
 	func.OnInvoke = callback
 end
 
