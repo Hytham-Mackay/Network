@@ -1,0 +1,11 @@
+{
+	"name": "Network",
+	"tree": {
+		"$className": "DataModel",
+		"ReplicatedStorage": {
+			"Network": {
+				"$path": "Network.luau"
+			}
+		}
+	}
+}

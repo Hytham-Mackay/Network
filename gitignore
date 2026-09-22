@@ -1,0 +1,16 @@
+# Rojo
+sourcemap.json
+
+# Aftman / Foreman (gerenciadores de versão de ferramentas, se você usar)
+.aftman-cache/
+
+# Wally (caso adicione dependências no futuro)
+Packages/
+ServerPackages/
+DevPackages/
+wally.lock
+
+# Sistema operacional / editor
+.DS_Store
+Thumbs.db
+*.swp

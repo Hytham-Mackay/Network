@@ -133,10 +133,6 @@ end
 
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------
 
--- Parte importante bebê
-
--- Obtenção de eventos + cache e criação autmática + Profissionalismo Mourant
-
 -- Classes permitidas nos helpers internos: restringe o className na checagem de tipos
 type RemoteClass = "RemoteEvent" | "RemoteFunction"
 type BindableClass = "BindableEvent" | "BindableFunction"
@@ -300,9 +296,6 @@ end
 
 -- Sistema de validação, mesma ideia padrão, validar no servidor e não no cliente
 
--- Outra parte importante, o any em players serve para receber qualquer quantidade de argumentos
-
--- boolean retorna true e false enquanto string? significa que pode ser nil, ai é so para o motivo de falha na validação
 -- (essa assinatura agora está no tipo exportado Validator, lá em cima)
 
 -- O validador vale para o RemoteEvent (OnServerEvent) OU para o RemoteFunction (OnServerInvoke) com esse nome.
@@ -399,8 +392,6 @@ function Network.FireClient(name: string, client: Player, ...: any)
 	event:FireClient(client, ...)
 end
 
--- Dispara pra todo mundo conectado, massa
-
 function Network.FireAllClients(name: string, ...: any)
 	if IS_CLIENT then
 		error("[Network] FireAllClients só pode ser chamado do servidor.")
@@ -409,8 +400,6 @@ function Network.FireAllClients(name: string, ...: any)
 	local event = _getRemoteEvent(name)
 	event:FireAllClients(...)
 end
-
--- Dispara pra todos os clientes, menos um escolhido, se for preconceituoso...
 
 function Network.FireExceptClient(name: string, exceptClient: Player, ...: any)
 	if IS_CLIENT then
@@ -447,16 +436,12 @@ function Network.OnServerEvent(name: string): ServerEvent
 	local event = _getRemoteEvent(name)
 
 	return {
-		-- Depois da seta indica o tipo de retorno da função, engraçado
-		-- nesse caso () equivale a void, meros nada
-
 		Connect = function(_: ServerEvent, callback: (player: Player, ...any) -> ())
 			return event.OnServerEvent:Connect(function(player: Player, ...)
 				if not _runValidator(name, player, ...) then
 					return
 				end
 
-				-- Callback é só isso: uma função que você entrega como argumento pra outra função, em vez de chamar ela na hora.
 				callback(player, ...)
 			end)
 		end,
@@ -479,7 +464,6 @@ function Network.OnServerEvent(name: string): ServerEvent
 			return connection
 		end,
 
-		-- Aceita "_" (self) igual Connect/Once, mesmo sem usar — só por consistência de assinatura.
 		-- Ignora eventos inválidos e continua esperando até chegar um válido.
 		-- table.pack/args.n preservam argumentos nil no meio da lista.
 
@@ -500,8 +484,6 @@ end
 
 -- RemoteFunctions cliente para servidor
 
---O cliente invoca uma função do servidor e espera a resposta
-
 function Network.InvokeServer(name: string, ...: any): ...any
 	if IS_SERVER then
 		error("[Network] InvokeServer só pode ser chamado do cliente.")
@@ -510,8 +492,6 @@ function Network.InvokeServer(name: string, ...: any): ...any
 	local func = _getRemoteFunction(name)
 	return func:InvokeServer(...)
 end
-
--- o Contrario, o servidor invoca uma função no cliente
 
 function Network.InvokeClient(name: string, client: Player, ...: any): ...any
 	if IS_CLIENT then
@@ -545,8 +525,6 @@ function Network.OnServerInvoke(name: string, callback: (Player, ...any) -> ...a
 	end
 end
 
--- o contrário, registra o callback que o cliente executa quando o servidor invoca
-
 function Network.OnClientInvoke(name: string, callback: (...any) -> ...any)
 	if IS_SERVER then
 		error("[Network] OnClientInvoke só pode ser chamado do cliente.")
@@ -561,8 +539,6 @@ end
 
 -----------------------------------------------------------------------------------------------------------------------------------------------------
 
--- BindableEvents Mesmo contexto, chegaaaaaa.
-
 -- Dispara um BindableEvent. Funciona apenas entre scripts do mesmo contexto
 -- (mesmo VM — servidor OU cliente, nunca os dois).
 
@@ -571,8 +547,6 @@ function Network.FireBindable(name: string, ...: any)
 	event:Fire(...)
 end
 
--- Retorna o sinal Event de um BindableEvent.
-
 function Network.OnBindableEvent(name: string): RBXScriptSignal
 	local event = _getBindableEvent(name)
 	return event.Event
@@ -580,16 +554,12 @@ end
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------
 
---  BindableFunctions !
-
--- Invoca um BindableFunction e espera a resposta.
+-- BindableFunctions
 
 function Network.InvokeBindable(name: string, ...: any): ...any
 	local func = _getBindableFunction(name)
 	return func:Invoke(...)
 end
-
--- Registra o callback de um BindableFunction.
 
 function Network.OnBindableInvoke(name: string, callback: (...any) -> ...any)
 	local func = _getBindableFunction(name)
@@ -601,9 +571,10 @@ end
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------
 
--- Funções útilitarias
+-- Funções utilitárias
 
--- prewarm é tipo micro ondas, ou seja, Pré-cria múltiplos eventos de uma só vez
+-- Pré-cria múltiplos eventos de uma vez (útil para garantir que tudo já exista antes do primeiro uso,
+-- em vez de depender da criação sob demanda no primeiro Fire/Connect/Invoke).
 
 function Network.Prewarm(config: PrewarmConfig)
 	if IS_CLIENT then
@@ -664,7 +635,7 @@ function Network.GetEventList(): EventList
 	return result
 end
 
---  Ativa ou desativa os logs de debug em tempo de execução.
+-- Ativa ou desativa os logs de debug em tempo de execução.
 
 function Network.SetDebug(enabled: boolean)
 	CONFIG.DEBUG = enabled
