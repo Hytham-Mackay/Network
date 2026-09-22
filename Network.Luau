@@ -321,6 +321,16 @@ function Network.SetValidator(EventName: string, validator: Validator)
 	DebugPrint("Validador registrado para:", EventName)
 end
 
+function Network.RemoveValidator(eventName: string)
+	if IS_CLIENT then
+		warn("[Network] Validadores só devem ser removidos no servidor. Ignorando.")
+		return
+	end
+
+	Validators[eventName] = nil
+	DebugPrint("Validador removido para:", eventName)
+end
+
 -- Helper interno usado pelo OnServerEvent (Connect, Once e Wait) e pelo OnServerInvoke.
 -- O validador é buscado em Validators[name] NO MOMENTO DO DISPARO, e não quando o
 -- OnServerEvent/OnServerInvoke é chamado. Assim, SetValidator valem para todos os
