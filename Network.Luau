@@ -323,7 +323,7 @@ end
 
 -- Helper interno usado pelo OnServerEvent (Connect, Once e Wait) e pelo OnServerInvoke.
 -- O validador é buscado em Validators[name] NO MOMENTO DO DISPARO, e não quando o
--- OnServerEvent/OnServerInvoke é chamado. Assim, SetValidator/RemoveValidator valem para todos os
+-- OnServerEvent/OnServerInvoke é chamado. Assim, SetValidator valem para todos os
 -- listeners, mesmo os que foram conectados antes.
 -- Retorna true se o evento pode seguir para o callback, false se deve ser ignorado.
 
@@ -658,25 +658,6 @@ end
 
 function Network.SetDebug(enabled: boolean)
 	CONFIG.DEBUG = enabled
-end
-
--- Excluir Eventos, remotes e etc, não é útil e pode ser removido da versão final
-
--- até mourant resolver isso em uma function só, isso vai ficar separado
-
-function Network.DestroyRemoteEvent(name: string)
-	if IS_CLIENT then
-		warn("[Network] Destroy só deve ser chamado no servidor.")
-		return
-	end
-
-	local event = cache.RemoteEvents[name]
-	if event then
-		event:Destroy()
-		cache.RemoteEvents[name] = nil
-		Validators[name] = nil
-		DebugPrint("RemoteEvent destruído:", name)
-	end
 end
 
 return Network
