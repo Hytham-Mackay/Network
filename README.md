@@ -8,9 +8,11 @@ Uma camada leve sobre `RemoteEvent`, `RemoteFunction`, `BindableEvent` e `Bindab
 ## Índice
 
 - [O que é o Network](#o-que-é-o-network)
+- [Por que usar o Network?](#por-que-usar-o-network)
 - [Conceitos rápidos](#conceitos-rápidos)
 - [Como instalar](#como-instalar)
 - [Onde colocar](#onde-colocar)
+- [Cheatsheet](#cheatsheet)
 - [RemoteEvents](#remoteevents)
 - [RemoteFunctions](#remotefunctions)
 - [Bindables](#bindables)
@@ -38,6 +40,74 @@ Network.FireServer("PlayerScored", 10)
 
 Escrito em Luau com `--!strict`, sem dependências externas.
 
+## Por que usar o Network?
+
+A pergunta certa não é "como o Network funciona", e sim: **o que muda pra quem usa, comparado a `RemoteEvent`/`RemoteFunction` puros?**
+
+**Antes (Roblox puro):**
+
+```lua
+-- Servidor: alguém precisa criar o RemoteEvent, normalmente num script de inicialização
+local dashRequest = Instance.new("RemoteEvent")
+dashRequest.Name = "DashRequest"
+dashRequest.Parent = game.ReplicatedStorage
+
+dashRequest.OnServerEvent:Connect(function(player, direction, speed)
+	-- a validação fica misturada com a lógica do dash
+	if typeof(direction) ~= "Vector3" then
+		return
+	end
+	if typeof(speed) ~= "number" or speed < 0 or speed > 100 then
+		return
+	end
+
+	-- lógica do dash
+end)
+
+-- Cliente: precisa saber esperar a criação, com o próprio timeout
+local dashRequest = game.ReplicatedStorage:WaitForChild("DashRequest", 10)
+if not dashRequest then
+	error("DashRequest não foi criado a tempo")
+end
+dashRequest:FireServer(direction, speed)
+```
+
+**Depois (com Network):**
+
+```lua
+-- Servidor: a validação fica separada da lógica
+Network.SetValidator("DashRequest", function(player, direction, speed)
+	if typeof(direction) ~= "Vector3" then
+		return false, "Direção inválida"
+	end
+	if typeof(speed) ~= "number" or speed < 0 or speed > 100 then
+		return false, "Velocidade inválida"
+	end
+	return true
+end)
+
+Network.OnServerEvent("DashRequest"):Connect(function(player, direction, speed)
+	-- só a lógica do dash — se chegou aqui, já passou pela validação
+end)
+
+-- Cliente: sem criar nada, sem esperar nada na mão
+Network.FireServer("DashRequest", direction, speed)
+```
+
+O que mudou, concretamente:
+
+- **Sem instância pra gerenciar.** Nenhum script de gameplay cria, nomeia ou dá `Parent` a um `RemoteEvent`. Você nem precisa saber se é o servidor ou o cliente que cria o objeto — o `Network` decide isso por trás.
+- **Validação como responsabilidade separada.** O `Validator` decide se os dados podem passar; o callback decide o que fazer com eles. Isso também vale para `Once`/`Wait`: os dois ignoram automaticamente um evento que o validador rejeitou, sem você escrever esse `while true` na mão.
+- **Erros que dizem o que fazer.** Em vez de descobrir na hora errada que um `RemoteEvent` nunca foi criado, você recebe uma mensagem dizendo exatamente isso — e sugerindo `Network.Prewarm`.
+
+**O que o Network não resolve por você**, pra não vender mais do que ele entrega:
+
+- Ele **não valida nada sozinho**. Sem um `Validator`, um evento aceita qualquer coisa — exatamente como um `RemoteEvent` puro.
+- Nomes são strings. Um typo só aparece em runtime; `Network.GetEventList()` ajuda a checar o que já existe, mas não é autocomplete.
+- `InvokeClient` continua **exatamente tão arriscado quanto o nativo** — o Network não resolve esse problema, só avisa sobre ele (veja [Limitações](#limitações)).
+
+Ou seja: o ganho real não é "fazer mágica", é tirar boilerplate repetitivo do caminho e dar um lugar organizado pra validação — o resto continua sendo Roblox puro por baixo.
+
 ## Conceitos rápidos
 
 Se você já conhece Luau, pode pular esta seção. Alguns pontos que aparecem bastante no código e nos exemplos:
@@ -60,6 +130,34 @@ Este repositório não está publicado no Wally. Veja o motivo em [Limitações]
 O módulo **precisa** estar em `ReplicatedStorage`, ou em qualquer lugar que servidor e cliente acessem pelo mesmo caminho.
 
 Isso importa porque `Network` trata cliente e servidor de forma diferente ao criar um `RemoteEvent`/`RemoteFunction`: o **servidor cria** o objeto na primeira vez que ele é pedido; o **cliente espera** essa criação com um `WaitForChild` com timeout. Se o módulo estiver em `ServerScriptService`, o cliente nunca vai conseguir `require` nele. Se estiver só em `StarterPlayerScripts`, o servidor não tem como criar nada ali.
+
+## Cheatsheet
+
+Referência rápida de toda a API. Para explicação e exemplos completos, veja as seções abaixo.
+
+| Função | O que faz | Exemplo |
+|---|---|---|
+| `FireServer(name, ...)` | Cliente → Servidor | `Network.FireServer("DashRequest", dir, 50)` |
+| `FireClient(name, player, ...)` | Servidor → 1 cliente | `Network.FireClient("Loot", player, "Espada")` |
+| `FireAllClients(name, ...)` | Servidor → todos os clientes | `Network.FireAllClients("Anuncio", "Oi")` |
+| `FireExceptClient(name, player, ...)` | Servidor → todos, menos 1 | `Network.FireExceptClient("Anuncio", p, "Oi")` |
+| `OnClientEvent(name):Connect(fn)` | Cliente escuta o servidor | `Network.OnClientEvent("Loot"):Connect(fn)` |
+| `OnServerEvent(name):Connect(fn)` | Servidor escuta o cliente | `Network.OnServerEvent("X"):Connect(fn)` |
+| `OnServerEvent(name):Once(fn)` | Só a 1ª vez válida | `Network.OnServerEvent("X"):Once(fn)` |
+| `OnServerEvent(name):Wait()` | Pausa até 1 evento válido | `local p, v = Network.OnServerEvent("X"):Wait()` |
+| `InvokeServer(name, ...)` | Cliente pergunta, servidor responde | `local r = Network.InvokeServer("GetInventory")` |
+| `OnServerInvoke(name, fn)` | Servidor responde ao cliente | `Network.OnServerInvoke("GetInventory", fn)` |
+| `InvokeClient(name, player, ...)` ⚠️ | Servidor pergunta, cliente responde — **bloqueia a thread, sem timeout** | veja [Limitações](#limitações) |
+| `OnClientInvoke(name, fn)` | Cliente responde ao servidor | `Network.OnClientInvoke("Confirmar", fn)` |
+| `FireBindable(name, ...)` | Mesmo contexto (servidor OU cliente) | `Network.FireBindable("PlayerDied", player)` |
+| `OnBindableEvent(name):Connect(fn)` | Mesmo contexto | `Network.OnBindableEvent("PlayerDied"):Connect(fn)` |
+| `InvokeBindable(name, ...)` | Mesmo contexto | `Network.InvokeBindable("CalcularDano", 10, 1.5)` |
+| `OnBindableInvoke(name, fn)` | Mesmo contexto | `Network.OnBindableInvoke("CalcularDano", fn)` |
+| `SetValidator(name, fn)` | Registra validação de entrada | veja [Validators](#validators) |
+| `RemoveValidator(name)` | Remove a validação | `Network.RemoveValidator("DashRequest")` |
+| `Prewarm({ ... })` | Cria vários eventos de uma vez | veja [Prewarm](#prewarm) |
+| `GetEventList()` | Lista tudo o que já foi criado | `Network.GetEventList()` |
+| `SetDebug(true/false)` | Liga/desliga logs internos | `Network.SetDebug(true)` |
 
 ## RemoteEvents
 
