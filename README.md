@@ -135,7 +135,7 @@ Isso importa porque `Network` trata cliente e servidor de forma diferente ao cri
 
 Referência rápida de toda a API. Para explicação e exemplos completos, veja as seções abaixo.
 
-Exemplo completo em CHEATSHEET.md
+Exemplo completo em [CHEATSHEET.md](CHEATSHEET.md).
 
 | Função | O que faz | Exemplo |
 |---|---|---|
