@@ -135,6 +135,8 @@ Isso importa porque `Network` trata cliente e servidor de forma diferente ao cri
 
 Referência rápida de toda a API. Para explicação e exemplos completos, veja as seções abaixo.
 
+Exemplo completo em CHEATSHEET.md
+
 | Função | O que faz | Exemplo |
 |---|---|---|
 | `FireServer(name, ...)` | Cliente → Servidor | `Network.FireServer("DashRequest", dir, 50)` |
